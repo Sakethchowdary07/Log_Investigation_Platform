@@ -1,0 +1,111 @@
+# LogSleuth knowledge base
+# =========================
+#
+# This file drives the rule-based detection engine. It is USER-EXTENSIBLE:
+# add, remove, or edit rules here (or point LOG_KB_PATH at your own file) to
+# change what causes are inferred. The engine contains NO hardcoded detection
+# logic; all matching comes from these rules.
+#
+# Schema
+# ------
+# rules:
+#   - id: unique_string                 # required, stable identifier
+#     name: Human readable name         # required
+#     match:                            # required, how error messages match
+#       any_of: [pattern, ...]          # rule matches if ANY pattern matches
+#       all_of: [pattern, ...]          # optional; ALL must also match
+#     possible_cause: string            # shown as the inferred cause
+#     related_errors: [string, ...]     # symptom labels shown to the user
+#     suggested_steps: [string, ...]    # ORDERED investigation steps (order preserved)
+#     weight: number                    # optional, default 1.0; higher wins ties
+#
+# Patterns are treated as case-insensitive regular expressions. Plain
+# substrings work too because they are valid regexes. A rule's score for a
+# window is (number of matching error messages) * weight; the highest scoring
+# rule wins and provides the cause / related errors / suggested steps.
+
+rules:
+  - id: db_connection_pool_exhaustion
+    name: Database connection pool exhaustion
+    match:
+      any_of:
+        - "connection pool"
+        - "pool exhausted"
+        - "timeout acquiring connection"
+        - "too many connections"
+        - "db timeout"
+        - "database timeout"
+        - "connection refused"
+        - "http 503"
+        - "503 service unavailable"
+    possible_cause: "Database connection pool exhaustion"
+    related_errors:
+      - "DB timeout"
+      - "Connection refused"
+      - "HTTP 503"
+    suggested_steps:
+      - "Check DB connections"
+      - "Check CPU"
+      - "Check connection pool"
+    weight: 1.0
+
+  - id: out_of_memory
+    name: Out of memory
+    match:
+      any_of:
+        - "outofmemory"
+        - "out of memory"
+        - "oomkilled"
+        - "java.lang.OutOfMemoryError"
+        - "cannot allocate memory"
+        - "memory exhausted"
+    possible_cause: "Application ran out of memory"
+    related_errors:
+      - "OutOfMemoryError"
+      - "OOMKilled"
+      - "Allocation failure"
+    suggested_steps:
+      - "Check process memory usage"
+      - "Review recent memory-heavy changes"
+      - "Increase heap / container memory limit"
+    weight: 1.0
+
+  - id: upstream_gateway_error
+    name: Upstream gateway error
+    match:
+      any_of:
+        - "http 502"
+        - "502 bad gateway"
+        - "http 504"
+        - "504 gateway timeout"
+        - "upstream timed out"
+        - "bad gateway"
+    possible_cause: "Upstream / gateway failure"
+    related_errors:
+      - "HTTP 502"
+      - "HTTP 504"
+      - "Upstream timeout"
+    suggested_steps:
+      - "Check upstream service health"
+      - "Check load balancer and gateway logs"
+      - "Verify network connectivity to upstream"
+    weight: 1.0
+
+  - id: disk_full
+    name: Disk full
+    match:
+      any_of:
+        - "no space left on device"
+        - "disk full"
+        - "quota exceeded"
+        - "enospc"
+    possible_cause: "Disk space exhaustion"
+    related_errors:
+      - "No space left on device"
+      - "Disk full"
+      - "Write failure"
+    suggested_steps:
+      - "Check disk usage (df -h)"
+      - "Clear or rotate logs / temp files"
+      - "Expand volume or add capacity"
+    weight: 1.0

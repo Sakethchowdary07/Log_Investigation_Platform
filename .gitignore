@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# SQLite databases and backend data directory
+*.db
+*.sqlite
+*.sqlite3
+backend/data/
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.local
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*~

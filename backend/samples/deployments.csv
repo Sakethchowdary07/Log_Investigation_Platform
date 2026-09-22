@@ -1,0 +1,4 @@
+timestamp,service,version,description
+2024-06-01 09:15:00,orders-api,v3.7.0,Nightly config rollout
+2024-06-01 10:39:00,orders-api,v3.8.0,Connection pool config change
+2024-06-01 11:05:00,orders-api,v3.8.1,Hotfix pool sizing

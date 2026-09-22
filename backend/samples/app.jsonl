@@ -1,0 +1,10 @@
+{"timestamp": "2024-06-01T10:40:05", "level": "INFO", "message": "Service started"}
+{"timestamp": "2024-06-01T10:41:20", "level": "INFO", "message": "Handled GET /api/checkout in 33ms"}
+{"timestamp": "2024-06-01T10:42:02", "level": "ERROR", "message": "DB timeout while acquiring connection from pool"}
+{"timestamp": "2024-06-01T10:42:08", "level": "ERROR", "message": "Timeout acquiring connection: connection pool exhausted"}
+{"timestamp": "2024-06-01T10:42:14", "level": "ERROR", "message": "Connection refused by database host db-primary:5432"}
+{"timestamp": "2024-06-01T10:42:29", "level": "CRITICAL", "message": "Too many connections; connection pool exhausted"}
+{"timestamp": "2024-06-01T10:42:41", "level": "ERROR", "message": "Upstream returned HTTP 503 Service Unavailable"}
+{"timestamp": "2024-06-01T10:42:55", "level": "ERROR", "message": "503 Service Unavailable returned to client"}
+{"timestamp": "2024-06-01T10:43:30", "level": "INFO", "message": "Retrying database connection"}
+{"timestamp": "2024-06-01T10:44:10", "level": "INFO", "message": "Handled GET /api/checkout in 40ms"}

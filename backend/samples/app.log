@@ -1,0 +1,14 @@
+2024-06-01 10:40:01 INFO  Service started, listening on :8080
+2024-06-01 10:40:15 INFO  Health check ok
+2024-06-01 10:41:02 INFO  Handled GET /api/orders in 42ms
+2024-06-01 10:41:30 WARN  Slow query detected on orders table (812ms)
+2024-06-01 10:42:03 ERROR DB timeout while acquiring connection from pool
+2024-06-01 10:42:07 ERROR Timeout acquiring connection: connection pool exhausted
+2024-06-01 10:42:11 ERROR Connection refused by database host db-primary:5432
+2024-06-01 10:42:18 CRITICAL Too many connections; connection pool exhausted
+2024-06-01 10:42:24 ERROR Upstream returned HTTP 503 Service Unavailable
+2024-06-01 10:42:39 ERROR DB timeout: could not get connection within 5000ms
+2024-06-01 10:42:52 ERROR 503 Service Unavailable returned to client
+2024-06-01 10:43:10 INFO  Retrying database connection
+2024-06-01 10:43:45 WARN  Recovered: connection pool back to normal
+2024-06-01 10:44:00 INFO  Handled GET /api/orders in 58ms
