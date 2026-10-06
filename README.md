@@ -202,6 +202,16 @@ burst. The cause, related errors, and ordered suggested steps still come
 entirely from the matched YAML rule; the `critical` flag only changes the
 **trigger**, never where the explanation comes from.
 
+> **Note on auto-detection.** LogSleuth auto-detects mainframe logs by sampling
+> the uploaded file and routing it through the mainframe parser only when the
+> majority of lines carry a mainframe marker (a z/OS message ID, abend token,
+> CICS abend, SQLCODE, or SYSLOG prefix). This conservative default avoids false
+> positives from ordinary logs that merely mention a mainframe-ish token in
+> prose, so a genuine mainframe code sitting inside a mostly plain-text log may
+> not auto-route to the mainframe parser and therefore may not trigger
+> single-critical detection. If you want to force mainframe parsing in that case,
+> call `parse_logs(text, fmt="mainframe")`.
+
 ### Sample files
 
 Three mainframe samples are bundled under `backend/samples/`. Upload any of
