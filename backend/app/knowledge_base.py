@@ -43,6 +43,12 @@ class Rule:
     related_errors: list[str] = field(default_factory=list)
     suggested_steps: list[str] = field(default_factory=list)
     weight: float = 1.0
+    # ``critical`` marks a rule whose single match is enough to trigger an
+    # investigation (see the single-critical detection mode) even when the
+    # error count is below the spike threshold. ``verify_note`` carries an
+    # advisory (e.g. "verify against official IBM manuals") surfaced to users.
+    critical: bool = False
+    verify_note: Optional[str] = None
 
     def __post_init__(self) -> None:
         self._any_re = [re.compile(p, re.IGNORECASE) for p in self.any_of]
@@ -65,6 +71,8 @@ class Rule:
             "related_errors": self.related_errors,
             "suggested_steps": self.suggested_steps,
             "weight": self.weight,
+            "critical": self.critical,
+            "verify_note": self.verify_note,
         }
 
 
@@ -102,6 +110,10 @@ class KnowledgeBase:
                     related_errors=list(raw.get("related_errors", []) or []),
                     suggested_steps=list(raw.get("suggested_steps", []) or []),
                     weight=float(raw.get("weight", 1.0)),
+                    critical=bool(raw.get("critical", False)),
+                    # Accept either ``verify_note`` or a ``notes`` alias; both
+                    # are optional and default to None for back-compat.
+                    verify_note=raw.get("verify_note", raw.get("notes")),
                 )
             )
         return cls(rules)
@@ -109,6 +121,14 @@ class KnowledgeBase:
     def match(self, message: str) -> list[Rule]:
         """Return all rules matching a single message."""
         return [rule for rule in self.rules if rule.matches(message)]
+
+    def critical_rules(self) -> list[Rule]:
+        """Return rules flagged ``critical: true``."""
+        return [rule for rule in self.rules if rule.critical]
+
+    def match_critical(self, message: str) -> list[Rule]:
+        """Return the critical rules that match a single message."""
+        return [rule for rule in self.rules if rule.critical and rule.matches(message)]
 
     def aggregate(self, messages: list[str]) -> Optional[RuleMatch]:
         """Score every rule across ``messages`` and return the best fit.

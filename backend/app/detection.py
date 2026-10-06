@@ -7,6 +7,13 @@ cause, related errors, and ordered suggested steps.
 
 If the entries carry no usable timestamps we fall back to a single count-based
 window so detection still works.
+
+Alongside spike detection, a data-driven SINGLE-CRITICAL-MESSAGE mode runs when
+the knowledge base defines rules flagged ``critical: true``. A single matching
+line (for example one ``SQLCODE -911`` or one ``S0C7``) is enough to emit a
+``CRITICAL MESSAGE`` detection even when the error count is below the spike
+threshold. The ``critical`` flag only changes the TRIGGER; the cause,
+related errors, and suggested steps still come from the matched YAML rule.
 """
 
 from __future__ import annotations
@@ -41,6 +48,11 @@ class SpikeDetector:
                 kb = KnowledgeBase.load()
             analyzer = RuleBasedAnalyzer(kb)
         self.analyzer = analyzer
+        # The single-critical mode needs the KB to scan for critical rules.
+        # Prefer an explicit kb; otherwise reuse the one the analyzer wraps.
+        if kb is None:
+            kb = getattr(analyzer, "kb", None)
+        self.kb = kb
         self.window_seconds = window_seconds
         self.threshold = threshold
 
@@ -123,7 +135,58 @@ class SpikeDetector:
                 detection = self._build_detection(errors, window_start=None, window_end=None)
                 result.detections.append(detection)
 
+        # Data-driven single-critical pass: one matching critical-rule line is
+        # enough to raise a detection even below the spike threshold.
+        result.detections.extend(
+            self._critical_detections(entries, result.detections)
+        )
+
         return result
+
+    def _critical_detections(self, entries, spike_detections) -> list[Detection]:
+        """Emit CRITICAL MESSAGE detections for lone critical-rule matches.
+
+        Scans ALL entries (a lone critical message may be the only line, and
+        its level may not be ERROR, e.g. an ICH408I RACF line). For each
+        critical rule that matches at least one line, a single detection is
+        emitted. A rule already attributed to a spike detection is skipped so a
+        burst that spike detection already reported is not double-counted.
+        """
+        detections: list[Detection] = []
+        if self.kb is None:
+            return detections
+        critical_rules = self.kb.critical_rules()
+        if not critical_rules:
+            return detections
+
+        # Rule ids a spike detection already reported (same rule+window).
+        spike_rule_ids = {
+            d.matched_signature for d in spike_detections if d.matched_signature
+        }
+
+        for rule in critical_rules:
+            if rule.id in spike_rule_ids:
+                continue
+            matching = [e for e in entries if rule.matches(e.message)]
+            if not matching:
+                continue
+
+            timed = [e for e in matching if e.timestamp is not None]
+            peak_time = min((e.timestamp for e in timed), default=None)
+            detection = Detection(
+                type="CRITICAL MESSAGE",
+                window_start=None,
+                window_end=None,
+                peak_time=peak_time,
+                error_count=len(matching),
+                possible_cause=rule.possible_cause,
+                related_errors=list(rule.related_errors),
+                suggested_steps=list(rule.suggested_steps),
+                matched_signature=rule.id,
+                confidence=1.0,
+            )
+            detections.append(detection)
+        return detections
 
     def _build_detection(self, bucket, window_start, window_end) -> Detection:
         messages = [e.message for e in bucket]
