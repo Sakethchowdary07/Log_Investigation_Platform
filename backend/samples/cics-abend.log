@@ -1,0 +1,4 @@
+10.42.03 INFO  CICS region CICSPRD1 ready, taking work
+10.42.11 ERROR DFHAC2236 10.42.11 CICSPRD1 Transaction TXN1 abend ASRA in program PAYPROG term T001
+10.42.11 ERROR DFHAC2206 10.42.11 CICSPRD1 Transaction TXN1 failed with abend ASRA. ABCODE=ASRA
+10.42.12 INFO  DFHDU0201 CICSPRD1 A transaction dump was taken for dumpcode AP0001

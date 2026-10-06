@@ -109,3 +109,540 @@ rules:
       - "Clear or rotate logs / temp files"
       - "Expand volume or add capacity"
     weight: 1.0
+
+  # ==========================================================================
+  # MAINFRAME (z/OS) rules
+  # ==========================================================================
+  #
+  # The rules below extend LogSleuth to investigate mainframe logs: DB2 for
+  # z/OS SQLCODEs, z/OS system completion (abend) codes, CICS transaction
+  # abend codes, and JES/system messages. They use two OPTIONAL fields in
+  # addition to the base schema:
+  #
+  #   critical: true          # a SINGLE matching line is enough to raise a
+  #                           # detection (single-critical mode), even below
+  #                           # the spike threshold. Omit for non-fatal rules.
+  #   verify_note: string     # advisory surfaced to users; here it flags that
+  #                           # the rule was seeded from general knowledge and
+  #                           # must be VERIFIED against the official manual.
+  #
+  # IMPORTANT / HONESTY NOTE: these rules are seeded from well-established,
+  # general mainframe knowledge. They are NOT copied from, and must not be
+  # treated as, verbatim IBM documentation. Each code's general meaning is
+  # stated with confidence, but remediation steps are PARAPHRASED and exact
+  # reason-code sub-values are NOT fabricated. Before relying on any of these
+  # in production, VERIFY against the official IBM manuals:
+  #   * z/OS MVS System Codes / z/OS MVS System Messages
+  #   * DB2 for z/OS Codes (SQL and reason codes)
+  #   * CICS Transaction Server Messages and Codes
+  #
+  # Seeded in PRIORITY ORDER: DB2 SQLCODEs, then z/OS abends, then CICS
+  # transaction abends, then JES/system messages.
+
+  # --- DB2 for z/OS SQLCODEs -------------------------------------------------
+
+  - id: db2_sqlcode_deadlock_timeout
+    name: DB2 deadlock or lock timeout (SQLCODE -911 / -913)
+    match:
+      any_of:
+        - 'SQLCODE -911(?!\d)'
+        - 'SQLCODE -913(?!\d)'
+    possible_cause: "DB2 detected a deadlock or lock timeout; the current unit of work was rolled back (-911) or not rolled back (-913)."
+    related_errors:
+      - "Deadlock"
+      - "Lock timeout"
+      - "Unit of work rolled back"
+    suggested_steps:
+      - "Identify the contending threads/transactions holding incompatible locks around the failure time."
+      - "Review commit frequency and lock scope; shorten units of work and commit more often."
+      - "Check access paths and indexing so rows are locked consistently and briefly."
+      - "Retry the transaction after rollback where the application design allows it."
+    weight: 2.0
+    critical: true
+    verify_note: "Seeded from general knowledge; verify against DB2 for z/OS Codes before production use."
+
+  - id: db2_sqlcode_resource_unavailable
+    name: DB2 resource unavailable (SQLCODE -904)
+    match:
+      any_of:
+        - 'SQLCODE -904(?!\d)'
+    possible_cause: "A DB2 resource required by the statement was unavailable; an accompanying reason code (00C9xxxx family) identifies the specific resource."
+    related_errors:
+      - "Resource unavailable"
+      - "Reason code 00C9xxxx"
+    suggested_steps:
+      - "Capture the full message including the reason code and resource name reported with the -904."
+      - "Look up the specific reason code to identify the unavailable object (table space, index, log, etc.)."
+      - "Check whether the resource is stopped, in utility, or in a restricted status and resolve accordingly."
+      - "Confirm there is adequate space and that no pending/recover state is blocking access."
+    weight: 2.0
+    critical: true
+    verify_note: "Seeded from general knowledge; the exact 00C9xxxx reason-code sub-values are NOT encoded here - verify against DB2 for z/OS Codes."
+
+  - id: db2_sqlcode_package_not_found
+    name: DB2 package or DBRM not found (SQLCODE -805)
+    match:
+      any_of:
+        - 'SQLCODE -805(?!\d)'
+    possible_cause: "The DB2 package or DBRM named in the request was not found in the plan or collection, so the program could not run."
+    related_errors:
+      - "Package not found"
+      - "DBRM not in plan"
+    suggested_steps:
+      - "Confirm the program was bound and the package exists in the expected collection."
+      - "Check that the plan or package list referenced by the application includes the right collection id."
+      - "Rebind the package/plan if it is missing or at the wrong consistency token."
+    weight: 1.5
+    verify_note: "Seeded from general knowledge; verify against DB2 for z/OS Codes."
+
+  - id: db2_sqlcode_timestamp_or_duplicate
+    name: DB2 consistency-token mismatch or duplicate key (SQLCODE -818 / -803)
+    match:
+      any_of:
+        - 'SQLCODE -818(?!\d)'
+        - 'SQLCODE -803(?!\d)'
+    possible_cause: "Either the load module and DBRM timestamps do not match (-818) or an insert/update violated a unique index or key (-803)."
+    related_errors:
+      - "Consistency token mismatch"
+      - "Duplicate key"
+      - "Unique constraint violation"
+    suggested_steps:
+      - "For a token mismatch, recompile and rebind so the load module and package timestamps agree."
+      - "For a duplicate key, inspect the keys being inserted/updated against the unique index definition."
+      - "Correct the data or the key-generation logic, or handle the duplicate condition in the application."
+    weight: 1.5
+    verify_note: "Seeded from general knowledge; verify against DB2 for z/OS Codes."
+
+  - id: db2_sqlcode_referential_constraint
+    name: DB2 referential constraint violation (SQLCODE -530 / -531)
+    match:
+      any_of:
+        - 'SQLCODE -530(?!\d)'
+        - 'SQLCODE -531(?!\d)'
+    possible_cause: "A foreign-key relationship was violated: an inserted/updated value has no matching parent (-530), or a parent-key update/delete left dependent rows (-531)."
+    related_errors:
+      - "Foreign key violation"
+      - "Referential integrity"
+    suggested_steps:
+      - "Identify the parent and dependent tables and the foreign-key relationship involved."
+      - "Ensure the parent row exists before inserting or updating the dependent row."
+      - "Review the delete/update rule (RESTRICT, CASCADE, SET NULL) and the order of operations."
+    weight: 1.5
+    verify_note: "Seeded from general knowledge; verify against DB2 for z/OS Codes."
+
+  - id: db2_sqlcode_object_not_defined
+    name: DB2 object not defined (SQLCODE -204)
+    match:
+      any_of:
+        - 'SQLCODE -204(?!\d)'
+    possible_cause: "An object (table, view, alias, etc.) named in the statement is not defined to DB2, often a qualifier/schema or spelling issue."
+    related_errors:
+      - "Object undefined"
+      - "Name not found"
+    suggested_steps:
+      - "Verify the object name and its qualifier/schema exactly as DB2 expects it."
+      - "Check the CURRENT SQLID / default qualifier the application runs under."
+      - "Confirm the object exists in the target subsystem and the program points at that subsystem."
+    weight: 1.0
+    verify_note: "Seeded from general knowledge; verify against DB2 for z/OS Codes."
+
+  - id: db2_sqlcode_authorization
+    name: DB2 authorization failure (SQLCODE -922)
+    match:
+      any_of:
+        - 'SQLCODE -922(?!\d)'
+    possible_cause: "The connection or authorization to DB2 failed; the authorization id lacks the privilege, or a connection/attach exit rejected the request."
+    related_errors:
+      - "Authorization failure"
+      - "Not authorized"
+    suggested_steps:
+      - "Confirm the authorization id has the required privilege (connect, execute, table access)."
+      - "Check the attachment/connection facility and any security exit for the subsystem."
+      - "Review recent security (RACF) or GRANT/REVOKE changes affecting this id."
+    weight: 1.5
+    critical: true
+    verify_note: "Seeded from general knowledge; verify against DB2 for z/OS Codes."
+
+  # --- z/OS system completion (abend) codes ---------------------------------
+
+  - id: zos_abend_s0c1
+    name: z/OS abend S0C1 (operation exception)
+    match:
+      any_of:
+        - '\bS0C1\b'
+    possible_cause: "An operation exception: the program tried to execute an invalid instruction, often from a bad branch, overlaid code, or a failed load/link."
+    related_errors:
+      - "Operation exception"
+      - "Invalid instruction"
+    suggested_steps:
+      - "Check that all called modules were found and loaded (no missing module or wrong library concatenation)."
+      - "Review recent link-edit or load-module changes for overlays or incorrect entry points."
+      - "Examine the failing offset in the dump to locate the invalid instruction."
+    weight: 1.5
+    verify_note: "Seeded from general knowledge; verify against z/OS MVS System Codes."
+
+  - id: zos_abend_s0c4
+    name: z/OS abend S0C4 (protection / addressing exception)
+    match:
+      any_of:
+        - '\bS0C4\b'
+    possible_cause: "A protection or addressing exception: the program referenced storage it does not own, commonly an uninitialized pointer, overrun, or bad subscript."
+    related_errors:
+      - "Protection exception"
+      - "Addressing exception"
+      - "Storage violation"
+    suggested_steps:
+      - "Locate the failing instruction and operand address from the dump/PSW."
+      - "Check for uninitialized pointers, array/table overruns, and bad working-storage lengths."
+      - "Review recent code changes to the module around the failing offset."
+    weight: 2.0
+    critical: true
+    verify_note: "Seeded from general knowledge; verify against z/OS MVS System Codes."
+
+  - id: zos_abend_s0c7
+    name: z/OS abend S0C7 (data exception)
+    match:
+      any_of:
+        - '\bS0C7\b'
+    possible_cause: "A data exception: a decimal/arithmetic operation ran on fields containing invalid (non-numeric or improperly initialized) packed/zoned data."
+    related_errors:
+      - "Data exception"
+      - "Invalid numeric data"
+      - "Uninitialized field"
+    suggested_steps:
+      - "Identify the failing instruction and the numeric field it operated on using the dump offset."
+      - "Check that the field is initialized and contains valid packed/zoned numeric data before arithmetic."
+      - "Validate input data and move layouts; a bad file record or redefinition is a common source."
+    weight: 2.0
+    critical: true
+    verify_note: "Seeded from general knowledge; verify against z/OS MVS System Codes."
+
+  - id: zos_abend_s0cb
+    name: z/OS abend S0CB (divide exception)
+    match:
+      any_of:
+        - '\bS0CB\b'
+    possible_cause: "A fixed-point or decimal divide exception, typically division by zero or a quotient too large for the receiving field."
+    related_errors:
+      - "Divide by zero"
+      - "Divide exception"
+    suggested_steps:
+      - "Find the divide instruction and its operands from the dump."
+      - "Guard against a zero divisor and validate the data feeding the division."
+      - "Confirm the result field is large enough for the quotient."
+    weight: 1.5
+    verify_note: "Seeded from general knowledge; verify against z/OS MVS System Codes."
+
+  - id: zos_abend_s806
+    name: z/OS abend S806 (module not found)
+    match:
+      any_of:
+        - '\bS806\b'
+    possible_cause: "A requested module could not be found or loaded (LINK/LOAD/ATTACH), usually a missing module or an incorrect library concatenation."
+    related_errors:
+      - "Module not found"
+      - "LOAD failure"
+    suggested_steps:
+      - "Confirm the module name is correct and present in STEPLIB/JOBLIB/linklist."
+      - "Check the library concatenation and that the correct load library is included."
+      - "Verify the module was link-edited and is the right version."
+    weight: 1.5
+    verify_note: "Seeded from general knowledge; verify against z/OS MVS System Codes."
+
+  - id: zos_abend_s80a_s878
+    name: z/OS abend S80A / S878 (virtual storage not available)
+    match:
+      any_of:
+        - '\bS80A\b'
+        - '\bS878\b'
+    possible_cause: "A request for virtual storage could not be satisfied; the region/address space ran short of available storage."
+    related_errors:
+      - "Storage not available"
+      - "Region too small"
+    suggested_steps:
+      - "Increase the REGION size for the step/job where feasible."
+      - "Review the program for excessive GETMAIN requests or storage not being freed."
+      - "Check for storage leaks across repeated iterations or long-running tasks."
+    weight: 1.5
+    critical: true
+    verify_note: "Seeded from general knowledge; verify against z/OS MVS System Codes."
+
+  - id: zos_abend_s822
+    name: z/OS abend S822 (REGION request cannot be satisfied)
+    match:
+      any_of:
+        - '\bS822\b'
+    possible_cause: "The requested REGION could not be obtained for the address space, so the job could not get the storage it asked for."
+    related_errors:
+      - "REGION unavailable"
+      - "Storage request failed"
+    suggested_steps:
+      - "Review the REGION parameter against what the system/IEFUSI exit allows."
+      - "Lower the REGION request or coordinate with systems programming on limits."
+      - "Check for an installation exit capping region size."
+    weight: 1.0
+    verify_note: "Seeded from general knowledge; verify against z/OS MVS System Codes."
+
+  - id: zos_abend_s913
+    name: z/OS abend S913 (security access denied)
+    match:
+      any_of:
+        - '\bS913\b'
+    possible_cause: "The job was denied access to a protected resource (for example a data set); the security product (RACF) rejected the access request."
+    related_errors:
+      - "Access denied"
+      - "Security violation"
+    suggested_steps:
+      - "Identify the resource and the access level requested from the accompanying messages (often ICH408I)."
+      - "Confirm the user/job has the required access authority to that resource profile."
+      - "Request the appropriate permission or correct the resource name/qualifier."
+    weight: 1.5
+    verify_note: "Seeded from general knowledge; verify against z/OS MVS System Codes and the security product manual."
+
+  - id: zos_abend_sb37_sd37_se37
+    name: z/OS abend SB37 / SD37 / SE37 (out of space on a data set)
+    match:
+      any_of:
+        - '\bSB37\b'
+        - '\bSD37\b'
+        - '\bSE37\b'
+    possible_cause: "A data set ran out of space: no secondary extents available on the volume (B37), primary filled with no secondary (D37), or the maximum number of extents reached (E37)."
+    related_errors:
+      - "Out of space"
+      - "No secondary extents"
+      - "Extent limit reached"
+    suggested_steps:
+      - "Increase the primary/secondary space allocation for the data set."
+      - "Check volume free space and add candidate volumes where appropriate."
+      - "Reorganize or consolidate extents, or allocate on a volume with more space."
+    weight: 2.0
+    critical: true
+    verify_note: "Seeded from general knowledge; verify against z/OS MVS System Codes."
+
+  - id: zos_abend_s213_s214
+    name: z/OS abend S213 / S214 (data set open/close error)
+    match:
+      any_of:
+        - '\bS213\b'
+        - '\bS214\b'
+    possible_cause: "An error occurred processing a data set during OPEN (213) or CLOSE/end-of-volume (214), for example a missing data set or a DCB/catalog problem."
+    related_errors:
+      - "OPEN failure"
+      - "CLOSE failure"
+      - "Data set not found"
+    suggested_steps:
+      - "Confirm the data set exists and is correctly cataloged and allocated in the JCL."
+      - "Check DCB/attributes and that the volume is available."
+      - "Review the reason code accompanying the abend to pinpoint the OPEN/CLOSE failure."
+    weight: 1.0
+    verify_note: "Seeded from general knowledge; verify against z/OS MVS System Codes."
+
+  # --- CICS transaction abend codes -----------------------------------------
+
+  - id: cics_abend_asra
+    name: CICS abend ASRA (program check in transaction)
+    match:
+      any_of:
+        - '\bASRA\b'
+    possible_cause: "A program check (hardware program interrupt) occurred in a CICS transaction, equivalent to an S0Cx in a program running under CICS (data, protection, or addressing exception)."
+    related_errors:
+      - "Program check"
+      - "ASRA"
+      - "Transaction abend"
+    suggested_steps:
+      - "Use the CICS transaction dump to find the failing program, offset, and interrupt type."
+      - "Map the program-interrupt code to the underlying cause (e.g. data vs protection exception) and inspect that logic."
+      - "Check for uninitialized or invalid data, bad pointers, or storage overlays in the failing program."
+    weight: 2.0
+    critical: true
+    verify_note: "Seeded from general knowledge; verify against CICS Transaction Server Messages and Codes."
+
+  - id: cics_abend_asrb
+    name: CICS abend ASRB (program check with abend)
+    match:
+      any_of:
+        - '\bASRB\b'
+    possible_cause: "A severe program check / abend occurred in a CICS transaction (for example an operating-system abend surfaced to CICS), terminating the transaction."
+    related_errors:
+      - "Program check"
+      - "ASRB"
+      - "Transaction abend"
+    suggested_steps:
+      - "Examine the CICS transaction dump for the failing program and the originating abend."
+      - "Correlate with any system (MVS) abend reported for the region at the same time."
+      - "Inspect the failing program logic and data around the abend offset."
+    weight: 2.0
+    critical: true
+    verify_note: "Seeded from general knowledge; verify against CICS Transaction Server Messages and Codes."
+
+  - id: cics_abend_aica
+    name: CICS abend AICA (runaway task)
+    match:
+      any_of:
+        - '\bAICA\b'
+    possible_cause: "A task ran without giving up control for longer than the runaway task limit (ICVR), so CICS abended it, commonly a tight or infinite loop."
+    related_errors:
+      - "Runaway task"
+      - "Loop"
+      - "AICA"
+    suggested_steps:
+      - "Review the transaction for loops that never issue an EXEC CICS command or otherwise yield control."
+      - "Check the ICVR runaway limit and whether it is appropriate for the workload."
+      - "Use the dump to locate where the task was looping."
+    weight: 2.0
+    critical: true
+    verify_note: "Seeded from general knowledge; verify against CICS Transaction Server Messages and Codes."
+
+  - id: cics_abend_akea
+    name: CICS abend AKEA (invalid operation / disabled program check)
+    match:
+      any_of:
+        - '\bAKEA\b'
+    possible_cause: "A program check occurred in a transaction and the condition was not handled, typically an invalid operation detected by CICS storage protection or an unhandled exception."
+    related_errors:
+      - "Invalid operation"
+      - "AKEA"
+      - "Transaction abend"
+    suggested_steps:
+      - "Examine the transaction dump for the failing program and offset."
+      - "Check for invalid instructions or storage-protection violations in the failing program."
+      - "Review recent changes to the program or its referenced storage."
+    weight: 1.5
+    verify_note: "Seeded from general knowledge; verify against CICS Transaction Server Messages and Codes."
+
+  - id: cics_abend_aey9
+    name: CICS abend AEY9 (invalid request / INVREQ)
+    match:
+      any_of:
+        - '\bAEY9\b'
+    possible_cause: "An EXEC CICS command raised the INVREQ (invalid request) condition that was not handled, meaning the command was issued in an invalid way or context."
+    related_errors:
+      - "INVREQ"
+      - "Invalid request"
+      - "AEY9"
+    suggested_steps:
+      - "Identify the EXEC CICS command that failed from the dump/trace."
+      - "Verify the command options and the state in which it was issued are valid."
+      - "Add handling for the INVREQ condition or correct the invalid command usage."
+    weight: 1.0
+    verify_note: "Seeded from general knowledge; verify against CICS Transaction Server Messages and Codes."
+
+  - id: cics_abend_aei_family
+    name: CICS abend AEIx (unhandled EXEC CICS condition)
+    match:
+      any_of:
+        - '\bAEI[0-9A-Z]\b'
+    possible_cause: "An EXEC CICS command raised a condition (for example NOTFND, DUPREC, LENGERR) that the program did not handle, so CICS abended the transaction with an AEIx code."
+    related_errors:
+      - "Unhandled condition"
+      - "NOTFND / DUPREC / LENGERR"
+      - "AEI abend family"
+    suggested_steps:
+      - "Decode the specific AEIx code to the EXEC CICS condition it represents."
+      - "Locate the command that raised the condition and add RESP/HANDLE handling for it."
+      - "Validate the data or resource state that triggered the condition."
+    weight: 1.0
+    verify_note: "Seeded from general knowledge; verify against CICS Transaction Server Messages and Codes."
+
+  - id: cics_abend_aex_family
+    name: CICS abend AEXx (unhandled EXEC CICS condition)
+    match:
+      any_of:
+        - '\bAEX[0-9A-Z]\b'
+    possible_cause: "An EXEC CICS command raised a condition that the program did not handle, so CICS abended the transaction with an AEXx code (same family of unhandled-condition abends as AEIx)."
+    related_errors:
+      - "Unhandled condition"
+      - "AEX abend family"
+    suggested_steps:
+      - "Decode the specific AEXx code to the EXEC CICS condition it represents."
+      - "Locate the command that raised the condition and add RESP/HANDLE handling for it."
+      - "Validate the data or resource state that triggered the condition."
+    weight: 1.0
+    verify_note: "Seeded from general knowledge; verify against CICS Transaction Server Messages and Codes."
+
+  # --- JES / system messages -------------------------------------------------
+
+  - id: zos_msg_ief450i
+    name: z/OS message IEF450I (job/step abended)
+    match:
+      any_of:
+        - '\bIEF450I\b'
+    possible_cause: "A job step ended abnormally; IEF450I reports the step and the system/user completion code so you can trace the failing step."
+    related_errors:
+      - "Step abend"
+      - "Job failed"
+    suggested_steps:
+      - "Read the completion code reported with IEF450I and investigate that abend specifically."
+      - "Identify the failing step and program named in the message."
+      - "Review the job's SYSOUT and any preceding messages for the root cause."
+    weight: 1.0
+    verify_note: "Seeded from general knowledge; verify against z/OS MVS System Messages."
+
+  - id: zos_msg_iec141i
+    name: z/OS message IEC141I (open/close error, often 013)
+    match:
+      any_of:
+        - '\bIEC141I\b'
+    possible_cause: "An I/O support error during OPEN/CLOSE processing (frequently a 013 return code), such as a DD statement mismatch, missing data set, or incompatible DCB attributes."
+    related_errors:
+      - "OPEN error"
+      - "013 abend"
+      - "DCB mismatch"
+    suggested_steps:
+      - "Check the DD statement and that the data set is allocated with the expected attributes."
+      - "Compare the program's DCB/record format and length to the data set's actual attributes."
+      - "Decode the return/reason code shown with IEC141I to pinpoint the OPEN/CLOSE failure."
+    weight: 1.0
+    verify_note: "Seeded from general knowledge; verify against z/OS MVS System Messages."
+
+  - id: zos_msg_ich408i
+    name: z/OS message ICH408I (RACF access/authorization)
+    match:
+      any_of:
+        - '\bICH408I\b'
+    possible_cause: "The security product (RACF) denied access to a protected resource or detected an authorization violation; ICH408I names the user, resource, and access attempted."
+    related_errors:
+      - "Access denied"
+      - "Insufficient authority"
+      - "RACF violation"
+    suggested_steps:
+      - "Read the user id, resource name, and access intent reported in the ICH408I message."
+      - "Confirm whether the user should have that access; request a permit or correct the resource reference."
+      - "Check for a recent profile/permission change or a mistyped data set/resource name."
+    weight: 1.5
+    critical: true
+    verify_note: "Seeded from general knowledge; verify against z/OS Security Server (RACF) Messages and Codes."
+
+  - id: zos_msg_ira200e
+    name: z/OS message IRA200E (auxiliary/SQA storage shortage)
+    match:
+      any_of:
+        - '\bIRA200E\b'
+    possible_cause: "The system reported a critical auxiliary storage (or SQA) shortage; paging/common storage is running critically low and the system may take action to protect itself."
+    related_errors:
+      - "Auxiliary storage shortage"
+      - "Paging shortage"
+      - "SQA shortage"
+    suggested_steps:
+      - "Identify address spaces consuming excessive storage and consider cancelling or constraining them."
+      - "Check paging data set configuration and add page space if persistently short."
+      - "Review workload and recent changes that increased common/aux storage demand."
+    weight: 2.0
+    critical: true
+    verify_note: "Seeded from general knowledge; verify against z/OS MVS System Messages."
+
+  - id: zos_msg_iea995i
+    name: z/OS message IEA995I (symptom dump)
+    match:
+      any_of:
+        - '\bIEA995I\b'
+    possible_cause: "A symptom dump was recorded for an abend; IEA995I summarizes the abend and reason code to help diagnose the failing task."
+    related_errors:
+      - "Symptom dump"
+      - "Abend summary"
+    suggested_steps:
+      - "Read the completion and reason code summarized in IEA995I and investigate that abend."
+      - "Correlate the symptom dump with the failing job/step and any companion messages."
+      - "Collect the full dump if deeper analysis is required."
+    weight: 1.0
+    verify_note: "Seeded from general knowledge; verify against z/OS MVS System Messages."
