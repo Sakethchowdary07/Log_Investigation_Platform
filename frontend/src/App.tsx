@@ -307,6 +307,9 @@ export default function App() {
                     {r.possible_cause ? (
                       <span className="hint">{r.possible_cause}</span>
                     ) : null}
+                    {r.verify_note ? (
+                      <span className="hint verify-note">⚠ {r.verify_note}</span>
+                    ) : null}
                   </li>
                 ))}
               </ul>

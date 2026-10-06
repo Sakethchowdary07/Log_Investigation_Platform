@@ -84,6 +84,19 @@ def test_parse_mainframe_line_normalizes_abend_token():
     assert entry.raw == "IEF450I MYJOB STEP01 - ABEND=S0C7"
 
 
+def test_abend_regex_does_not_capture_english_word():
+    """`User ABCD` must not be read as a user completion code `UABCD`.
+
+    Real z/OS completion codes contain digits, so a plain hex-letter word that
+    follows User/System is not surfaced as a token.
+    """
+    entry = parse_mainframe_line("MYLOG User ABCD abended the session", 1)
+    assert "UABCD" not in entry.message
+    # A genuine user abend with digits is still surfaced.
+    entry2 = parse_mainframe_line("Job hit User 4038 completion code", 1)
+    assert "U4038" in entry2.message
+
+
 def test_mainframe_continuation_is_assembled(samples_dir):
     """A clearly-indented continuation line is appended to the prior entry."""
     text = (

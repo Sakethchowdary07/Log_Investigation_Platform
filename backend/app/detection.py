@@ -146,11 +146,18 @@ class SpikeDetector:
     def _critical_detections(self, entries, spike_detections) -> list[Detection]:
         """Emit CRITICAL MESSAGE detections for lone critical-rule matches.
 
-        Scans ALL entries (a lone critical message may be the only line, and
-        its level may not be ERROR, e.g. an ICH408I RACF line). For each
-        critical rule that matches at least one line, a single detection is
-        emitted. A rule already attributed to a spike detection is skipped so a
-        burst that spike detection already reported is not double-counted.
+        Scans only entries surfaced by the MAINFRAME parser
+        (``source_format == "mainframe"``). A lone critical message may be the
+        only line and its level may not be ERROR (e.g. an ICH408I RACF line),
+        so level/count are not used as a gate; but gating on the mainframe
+        parser prevents a plain-text or JSON log that merely mentions a
+        mainframe-ish token in prose from raising a false critical finding.
+
+        For each critical rule that matches, a detection is emitted. Matches
+        that fall inside a spike window which ALREADY reported that same rule
+        are suppressed (so a burst is not double-counted), but matches outside
+        any such window still produce a detection, so a legitimately-distinct
+        later occurrence of the same abend is not silently dropped.
         """
         detections: list[Detection] = []
         if self.kb is None:
@@ -159,26 +166,48 @@ class SpikeDetector:
         if not critical_rules:
             return detections
 
-        # Rule ids a spike detection already reported (same rule+window).
-        spike_rule_ids = {
-            d.matched_signature for d in spike_detections if d.matched_signature
-        }
+        mainframe_entries = [
+            e for e in entries if getattr(e, "source_format", "text") == "mainframe"
+        ]
+        if not mainframe_entries:
+            return detections
+
+        # For each rule id, collect the time windows a spike already attributed
+        # to it, so repeat occurrences within those windows are not re-reported.
+        spike_windows: dict[str, list[tuple[datetime, datetime]]] = defaultdict(list)
+        for d in spike_detections:
+            if d.matched_signature and d.window_start is not None and d.window_end is not None:
+                spike_windows[d.matched_signature].append((d.window_start, d.window_end))
+
+        def _in_reported_window(rule_id: str, ts: Optional[datetime]) -> bool:
+            if ts is None:
+                return False
+            for start, end in spike_windows.get(rule_id, ()):
+                if start <= ts < end:
+                    return True
+            return False
 
         for rule in critical_rules:
-            if rule.id in spike_rule_ids:
-                continue
-            matching = [e for e in entries if rule.matches(e.message)]
+            matching = [e for e in mainframe_entries if rule.matches(e.message)]
             if not matching:
                 continue
 
-            timed = [e for e in matching if e.timestamp is not None]
+            # Drop matches already covered by a spike window for this rule; a
+            # match with no timestamp is kept (it cannot be placed in a window).
+            remaining = [
+                e for e in matching if not _in_reported_window(rule.id, e.timestamp)
+            ]
+            if not remaining:
+                continue
+
+            timed = [e for e in remaining if e.timestamp is not None]
             peak_time = min((e.timestamp for e in timed), default=None)
             detection = Detection(
                 type="CRITICAL MESSAGE",
                 window_start=None,
                 window_end=None,
                 peak_time=peak_time,
-                error_count=len(matching),
+                error_count=len(remaining),
                 possible_cause=rule.possible_cause,
                 related_errors=list(rule.related_errors),
                 suggested_steps=list(rule.suggested_steps),

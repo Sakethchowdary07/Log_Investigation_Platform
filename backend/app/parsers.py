@@ -182,7 +182,13 @@ _MF_MSGID_RE = re.compile(r"\b([A-Z]{3,4}\d{2,5}[A-Z])\b")
 
 # z/OS abend / system completion code: System (Snnn, 3 hex digits) or User
 # (Unnnn, up to 4 decimal digits). Examples: S0C7, S806, SB37, U4038, U0778.
-_MF_ABEND_RE = re.compile(r"\b([SU])(?:ystem|ser)?[= ]?0*([0-9A-F]{3,4})\b", re.IGNORECASE)
+# The code must contain at least one DIGIT so a plain English word following
+# "User"/"System" (e.g. "User ABCD") is not misread as a completion code; real
+# z/OS completion codes always include digits.
+_MF_ABEND_RE = re.compile(
+    r"\b([SU])(?:ystem|ser)?[= ]?((?=[0-9A-F]{3,4}\b)[0-9A-F]*\d[0-9A-F]*)\b",
+    re.IGNORECASE,
+)
 # Simpler form that catches the common inline token Snnn / Unnnn directly.
 _MF_ABEND_TOKEN_RE = re.compile(r"\b(S[0-9A-F]{3}|U\d{3,4})\b")
 
@@ -405,6 +411,7 @@ def parse_mainframe_line(line: str, source_line: int) -> LogEntry:
         message=message,
         raw=raw,
         source_line=source_line,
+        source_format="mainframe",
     )
 
 
@@ -425,8 +432,11 @@ def parse_mainframe(text: str) -> list[LogEntry]:
             prev.message = f"{prev.message} {cont}".strip()
             prev.raw = f"{prev.raw}\n{line.rstrip(chr(10))}"
             # A continuation may carry codes the opening line lacked; surface
-            # any new tokens so the KB can still match them.
-            new_tokens = [t for t in _mainframe_tokens(cont) if t not in prev.message]
+            # any new tokens so the KB can still match them. Use an exact-token
+            # comparison (not a substring test) so a genuinely-new token is not
+            # skipped merely because it is a substring of existing text.
+            existing_tokens = set(_mainframe_tokens(prev.message))
+            new_tokens = [t for t in _mainframe_tokens(cont) if t not in existing_tokens]
             if new_tokens:
                 prev.message = f"{' '.join(new_tokens)} | {prev.message}"
             continue

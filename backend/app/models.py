@@ -22,6 +22,11 @@ class LogEntry(BaseModel):
     message: str = ""
     raw: str = ""
     source_line: int = 0
+    # Which parser produced this entry: "text", "json", or "mainframe". The
+    # single-critical detection pass only scans entries surfaced by the
+    # mainframe parser so a plain-text log that merely mentions a mainframe-ish
+    # token in prose does not raise a false critical finding.
+    source_format: str = "text"
 
 
 class DeploymentCorrelation(BaseModel):

@@ -272,3 +272,8 @@ body {
   font-weight: 600;
   font-size: 14px;
 }
+
+.verify-note {
+  font-style: italic;
+  font-size: 12px;
+}
