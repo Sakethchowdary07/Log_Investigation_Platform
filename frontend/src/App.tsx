@@ -298,7 +298,12 @@ export default function App() {
               <ul className="kb-list">
                 {rules.map((r) => (
                   <li key={r.id}>
-                    <span className="kb-name">{r.name}</span>
+                    <span className="kb-name">
+                      {r.name}
+                      {r.critical ? (
+                        <span className="badge subtle">critical</span>
+                      ) : null}
+                    </span>
                     {r.possible_cause ? (
                       <span className="hint">{r.possible_cause}</span>
                     ) : null}

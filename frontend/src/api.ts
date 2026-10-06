@@ -48,6 +48,12 @@ export interface KnowledgeBaseRule {
   related_errors: string[];
   suggested_steps: string[];
   weight: number;
+  // Optional fields used by the mainframe knowledge base. `critical` marks a
+  // rule whose single matching message is enough to trigger an investigation
+  // (even without a spike); `verify_note` reminds operators to confirm the
+  // rule against the official IBM manuals before production reliance.
+  critical?: boolean;
+  verify_note?: string | null;
 }
 
 export interface KnowledgeBaseResponse {

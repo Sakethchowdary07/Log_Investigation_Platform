@@ -56,13 +56,13 @@ project root
 ├── backend/            FastAPI app, tests, knowledge base, sample logs
 │   ├── app/
 │   │   ├── main.py                 API routes (upload, analyses, knowledge-base, health)
-│   │   ├── parsers.py              plain-text + JSON-lines log parsing
+│   │   ├── parsers.py              plain-text + JSON-lines + mainframe log parsing
 │   │   ├── detection.py            error-spike detection
 │   │   ├── knowledge_base.py       Rule / KnowledgeBase / Analyzer / RuleBasedAnalyzer
 │   │   ├── correlation.py          deployment-timeline correlation
 │   │   ├── storage.py              SQLite persistence
 │   │   └── config/knowledge_base.yaml   the rules (editable)
-│   ├── samples/        app.log, app.jsonl, deployments.csv
+│   ├── samples/        app.log, app.jsonl, deployments.csv, mainframe-joblog.log, db2-sqlcode.log, cics-abend.log
 │   └── tests/
 └── frontend/           Vite React TypeScript dashboard
 ```
@@ -153,6 +153,163 @@ Expected result for `app.log`:
   nearby deploy and a step to **review the deployment at 10:39 AM**
   (orders-api v3.8.0, "Connection pool config change") is surfaced.
 
+## Mainframe log support
+
+LogSleuth can also investigate **mainframe logs** in addition to application and
+server logs. When an uploaded file looks like mainframe output, the parser
+routes it through a dedicated path that normalizes the lines into the same
+entry shape used everywhere else, while surfacing the significant codes (message
+IDs, abend codes, CICS abend codes, DB2 SQLCODEs and reason codes) as plain
+tokens so the knowledge base can match them. No change to the detection pipeline
+or the frontend is required: mainframe findings render in the same detection
+card as every other result.
+
+### Log styles handled
+
+- **z/OS SYSLOG / OPERLOG** operator and system message streams.
+- **JES job logs** (JESMSGLG / JESYSMSG style job and step output).
+
+Timestamp conventions common to these styles are recognized where present
+(for example `HH.MM.SS` SYSLOG times), with a graceful fallback when a line
+carries no usable timestamp.
+
+### Code categories recognized
+
+The seeded rules cover four categories, in the following priority order:
+
+1. **DB2 for z/OS SQLCODEs** – for example `SQLCODE -911` / `-913`
+   (deadlock or lock timeout rollback), `-904` resource unavailable
+   (the `00C9xxxx` reason-code family), `-805`, `-818` / `-803`,
+   `-530` / `-531`, `-204`, and `-922`.
+2. **z/OS system completion (abend) codes** – for example `S0C1`, `S0C4`,
+   `S0C7`, `S0CB`, `S806`, `S80A`, `S822`, `S878`, `S913`, `SB37` / `SD37` /
+   `SE37`, and `S213` / `S214`.
+3. **CICS transaction abends** – for example `ASRA`, `ASRB`, `AICA`, `AKEA`,
+   `AEY9`, and the `AEIx` / `AEXx` families.
+4. **JES / system messages** – for example `IEF450I` (job or step abend),
+   `IEC141I` (open or close error), `ICH408I` (RACF access or authorization),
+   `IRA200E` (storage shortage), and `IEA995I` (symptom dump).
+
+### Single-critical-message detection
+
+Classic spike detection still works exactly as before: a window of ERROR-level
+entries at or above the threshold becomes an **ERROR SPIKE**. On top of that,
+mainframe support adds a **single-critical-message** mode. Rules may be flagged
+`critical: true`, and when a message matches such a rule it triggers a
+**`CRITICAL MESSAGE`** detection on its own: a single `S0C7`, a lone
+`SQLCODE -911`, or one `ASRA` is enough to open an investigation even without a
+burst. The cause, related errors, and ordered suggested steps still come
+entirely from the matched YAML rule; the `critical` flag only changes the
+**trigger**, never where the explanation comes from.
+
+### Sample files
+
+Three mainframe samples are bundled under `backend/samples/`. Upload any of
+them through the UI (or `POST /api/upload`) to see the behavior.
+
+- **`mainframe-joblog.log`** – a JES / z/OS job-log excerpt including an
+  `IEF450I MYJOB STEP01 - ABEND=S0C7` data-exception abend, an `ICH408I` RACF
+  access line, an `IEC141I` open error, and an `IEA995I` symptom dump. Expected
+  output:
+
+  ```
+  CRITICAL MESSAGE
+  ────────────────
+  Possible cause:
+  A data exception: a decimal/arithmetic operation ran on fields containing
+  invalid (non-numeric or improperly initialized) packed/zoned data.
+
+  Suggested investigation:
+  1. Identify the failing instruction and the numeric field it operated on using the dump offset.
+  2. Check that the field is initialized and contains valid packed/zoned numeric data before arithmetic.
+  3. Validate input data and move layouts; a bad file record or redefinition is a common source.
+  ```
+
+- **`db2-sqlcode.log`** – a DB2 for z/OS diagnostic snippet with a
+  `SQLCODE -911` deadlock/timeout rollback line and a `SQLCODE -904`
+  resource-unavailable line referencing a generic `00C9xxxx` reason code.
+  Expected output:
+
+  ```
+  CRITICAL MESSAGE
+  ────────────────
+  Possible cause:
+  DB2 detected a deadlock or lock timeout; the current unit of work was
+  rolled back (-911) or not rolled back (-913).
+
+  Suggested investigation:
+  1. Identify the contending threads/transactions holding incompatible locks around the failure time.
+  2. Review commit frequency and lock scope; shorten units of work and commit more often.
+  3. Check access paths and indexing so rows are locked consistently and briefly.
+  4. Retry the transaction after rollback where the application design allows it.
+  ```
+
+- **`cics-abend.log`** – a CICS transaction-abend excerpt with `ABCODE=ASRA`
+  lines. Expected output: a `CRITICAL MESSAGE` detection whose possible cause
+  describes the `ASRA` program check (a storage or data exception in the
+  application program).
+
+### Extending the mainframe knowledge base
+
+Mainframe rules live in the **same** `backend/app/config/knowledge_base.yaml`
+file and use the **same YAML schema** as every other rule (see
+[Extending the knowledge base](#extending-the-knowledge-base) below). Just add a
+new entry to the `rules:` list whose `match.any_of` patterns include the code
+you want to detect (patterns are case-insensitive regexes, so `S0C7`,
+`SQLCODE -911`, or `AEI[0-9A-Z]` all work).
+
+Two **optional** fields support the mainframe workflow:
+
+| Field         | Type            | Description                                                                                 |
+| ------------- | --------------- | ------------------------------------------------------------------------------------------- |
+| `critical`    | bool (`false`)  | When `true`, a single matching message triggers a `CRITICAL MESSAGE` detection on its own.  |
+| `verify_note` | string (`null`) | A reminder of what to confirm against the official IBM manuals before relying on the rule.  |
+
+Both are back-compatible: rules that omit them load exactly as before, and they
+are exposed through `GET /api/knowledge-base`. Example:
+
+```yaml
+rules:
+  - id: db2_sqlcode_deadlock_timeout
+    name: DB2 deadlock or lock timeout (SQLCODE -911 / -913)
+    match:
+      any_of:
+        - "SQLCODE -911"
+        - "SQLCODE -913"
+    possible_cause: "DB2 detected a deadlock or lock timeout; the current unit of work was rolled back (-911) or not rolled back (-913)."
+    related_errors:
+      - "Deadlock"
+      - "Lock timeout"
+    suggested_steps:
+      - "Identify the contending threads/transactions holding incompatible locks around the failure time."
+      - "Review commit frequency and lock scope; shorten units of work and commit more often."
+    weight: 2.0
+    critical: true
+    verify_note: "Verify the exact SQLCODE meaning and reason codes against DB2 for z/OS Codes before production reliance."
+```
+
+> ### Important: verify against the official IBM manuals
+>
+> The seeded mainframe rules are **compiled from general, well-established
+> mainframe knowledge**. They are **not** verbatim IBM documentation and were
+> **not** taken from IBM's official docs. The code meanings and remediation
+> steps are paraphrased general guidance intended to give a useful first-pass
+> investigation, not authoritative text.
+>
+> Before relying on any mainframe rule in production, **verify the specifics**
+> (exact code meanings, reason-code sub-values, and recommended programmer
+> responses) against the official IBM manuals, in particular:
+>
+> - **z/OS MVS System Codes** and **z/OS MVS System Messages** (abends and
+>   system or JES messages).
+> - **DB2 for z/OS Codes** (SQLCODEs and reason codes).
+> - **CICS Transaction Server Messages and Codes** (transaction abends).
+>
+> Each seeded mainframe rule carries a `verify_note` field as a built-in
+> reminder of this. As with every rule, the knowledge base is fully editable:
+> correct, extend, or replace these entries to match your own validated
+> references.
+
 ## Extending the knowledge base
 
 All detection rules live in `backend/app/config/knowledge_base.yaml`. Edit that
@@ -178,6 +335,8 @@ the `Rule` model in `backend/app/knowledge_base.py`):
 | `related_errors`  | no       | Symptom labels shown to the user.                                           |
 | `suggested_steps` | no       | Ordered investigation steps (order is preserved).                           |
 | `weight`          | no       | Score multiplier, default `1.0`; higher values win ties.                    |
+| `critical`        | no       | If `true`, a single matching message triggers a `CRITICAL MESSAGE` detection on its own (used by the mainframe rules; see [Mainframe log support](#mainframe-log-support)). Default `false`. |
+| `verify_note`     | no       | Free-text reminder of what to confirm against an authoritative source before relying on the rule. Default none. |
 
 \* Provide at least one of `any_of` / `all_of`; a rule with no patterns matches
 nothing.
